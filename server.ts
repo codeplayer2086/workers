@@ -45,6 +45,11 @@ import {
 import { translateWorkerFieldsToArabic } from './src/lib/arabic-translator.ts';
 import { calculateAge } from './src/lib/cv-dictionary.ts';
 import { isMysqlConfigured } from './src/lib/runtime-config.ts';
+import {
+  buildCompanyEngagement,
+  buildOccupationBreakdown,
+  buildWorkerAlerts,
+} from './src/lib/admin-analytics.ts';
 
 const PORT = Number(process.env.PORT || 3000);
 const upload = multer({
@@ -258,7 +263,20 @@ async function startServer() {
   // ── ADMIN ENDPOINTS ──────────────────────────────────────────────────────────
   app.get('/api/admin/overview', requireAuth, requireRole('ADMIN'), async (_req, res) => {
     try {
-      const allWorkers = await db.select({ status: workers.status }).from(workers);
+      const allWorkers = await db
+        .select({
+          id: workers.id,
+          workerCode: workers.workerCode,
+          fullNameEn: workers.fullNameEn,
+          status: workers.status,
+          occupationCode: workers.occupationCode,
+          passportExpiryDate: workers.passportExpiryDate,
+          facePhotoPath: workers.facePhotoPath,
+          fullBodyPhotoPath: workers.fullBodyPhotoPath,
+          contractedCompanyId: workers.contractedCompanyId,
+        })
+        .from(workers);
+
       const statusCounts = {
         total: allWorkers.length,
         DRAFT: allWorkers.filter((w) => w.status === 'DRAFT').length,
@@ -267,8 +285,39 @@ async function startServer() {
         CONTRACTED: allWorkers.filter((w) => w.status === 'CONTRACTED').length,
       };
 
-      const allCompanies = await db.select().from(companies);
-      const allUsers = await db.select().from(users);
+      const allCompanies = await db
+        .select({
+          id: companies.id,
+          nameEn: companies.nameEn,
+          country: companies.country,
+          isActive: companies.isActive,
+        })
+        .from(companies);
+
+      const allUsers = await db
+        .select({
+          role: users.role,
+          companyId: users.companyId,
+          isActive: users.isActive,
+        })
+        .from(users);
+
+      const docCounts = await db
+        .select({
+          workerId: workerDocuments.workerId,
+          count: count(),
+        })
+        .from(workerDocuments)
+        .groupBy(workerDocuments.workerId);
+      const docCountByWorker = new Map(docCounts.map((d) => [d.workerId, Number(d.count)]));
+
+      const allDownloadsForStats = await db
+        .select({
+          companyId: cvDownloadLogs.companyId,
+          language: cvDownloadLogs.language,
+        })
+        .from(cvDownloadLogs);
+
       const recentDownloads = await db
         .select({
           id: cvDownloadLogs.id,
@@ -285,19 +334,43 @@ async function startServer() {
         .innerJoin(users, eq(cvDownloadLogs.agentId, users.id))
         .innerJoin(companies, eq(cvDownloadLogs.companyId, companies.id))
         .orderBy(desc(cvDownloadLogs.downloadedAt))
-        .limit(10);
+        .limit(8);
 
-      const [downloadCountRow] = await db
-        .select({ totalDownloads: count() })
-        .from(cvDownloadLogs);
+      const recentAudits = await db
+        .select({
+          id: auditLogs.id,
+          action: auditLogs.action,
+          entityType: auditLogs.entityType,
+          entityId: auditLogs.entityId,
+          createdAt: auditLogs.createdAt,
+          actorName: users.fullName,
+          actorRole: users.role,
+        })
+        .from(auditLogs)
+        .leftJoin(users, eq(auditLogs.actorId, users.id))
+        .orderBy(desc(auditLogs.createdAt))
+        .limit(8);
+
+      const alerts = buildWorkerAlerts(allWorkers, docCountByWorker).slice(0, 8);
+      const occupationBreakdown = buildOccupationBreakdown(allWorkers);
+      const companyEngagement = buildCompanyEngagement(
+        allCompanies,
+        allUsers,
+        allDownloadsForStats,
+        allWorkers
+      );
 
       res.json({
         statusCounts,
         companyCount: allCompanies.length,
         agentCount: allUsers.filter((u) => u.role === 'AGENT').length,
         employeeCount: allUsers.filter((u) => u.role === 'EMPLOYEE').length,
-        totalDownloads: Number(downloadCountRow?.totalDownloads ?? 0),
+        totalDownloads: allDownloadsForStats.length,
         recentDownloads,
+        recentAudits,
+        alerts,
+        occupationBreakdown,
+        companyEngagement,
       });
     } catch (err) {
       console.error('Admin overview failed:', err);

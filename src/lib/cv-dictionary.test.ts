@@ -7,6 +7,7 @@ import {
   getOccupationLabel,
   getReligionLabel,
   getSkillValueLabel,
+  PROFILE_LABELS,
   SKILL_LABELS,
   transliterateTextToArabicFallback,
 } from './cv-dictionary';
@@ -19,12 +20,14 @@ test('calculateAge computes accurate integer age before and after birthday', () 
 });
 
 test('EN and AR dictionaries remain strictly separated without mixed scripts', () => {
-  for (const key of Object.keys(CV_LABELS.EN)) {
-    const enVal = CV_LABELS.EN[key];
-    const arVal = CV_LABELS.AR[key];
-    assert.ok(enVal && arVal, `Missing translation for key: ${key}`);
-    assert.equal(/[\u0600-\u06FF]/.test(enVal), false, `EN label "${key}" contains Arabic characters`);
-    assert.equal(/[\u0600-\u06FF]/.test(arVal), true, `AR label "${key}" must contain Arabic script`);
+  for (const dict of [CV_LABELS, PROFILE_LABELS]) {
+    for (const key of Object.keys(dict.EN)) {
+      const enVal = dict.EN[key];
+      const arVal = dict.AR[key];
+      assert.ok(enVal && arVal, `Missing translation for key: ${key}`);
+      assert.equal(/[\u0600-\u06FF]/.test(enVal), false, `EN label "${key}" contains Arabic characters`);
+      assert.equal(/[\u0600-\u06FF]/.test(arVal), true, `AR label "${key}" must contain Arabic script`);
+    }
   }
 });
 
