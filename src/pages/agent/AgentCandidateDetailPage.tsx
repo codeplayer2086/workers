@@ -1,13 +1,21 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { Link, useParams } from 'react-router-dom';
-import { toPng } from 'html-to-image';
-import { jsPDF } from 'jspdf';
-import { ArrowLeft, Download, FileImage, FileText, Maximize2, X } from 'lucide-react';
+import {
+  ArrowLeft,
+  Download,
+  FileImage,
+  FileText,
+  Maximize2,
+  MessageCircle,
+  X,
+} from 'lucide-react';
 import { DashboardShell } from '../../components/layout/DashboardShell';
 import { CVDocumentA4 } from '../../components/cv/CVDocumentA4';
+import { SendCvWhatsAppModal } from '../../components/cv/SendCvWhatsAppModal';
 import { PrivateImage } from '../../components/common/PrivateImage';
 import { useAuth } from '../../context/AuthContext';
 import { apiFetch } from '../../lib/api';
+import { generateCvExportPayload } from '../../lib/cv-renderer';
 import {
   calculateAge,
   CV_LABELS,
@@ -23,11 +31,7 @@ import {
   SKILL_LABELS,
   type CvLang,
 } from '../../lib/cv-dictionary';
-import {
-  dataUrlToBlob,
-  fetchAuthenticatedDataUrl,
-  triggerBlobDownload,
-} from '../../lib/private-file';
+import { triggerBlobDownload } from '../../lib/private-file';
 import type { Company, CompanyCvTemplate, WorkerDetail } from '../../types/portal';
 
 function formatDisplayDate(val: string | null | undefined, lang: CvLang): string {
@@ -53,6 +57,7 @@ export function AgentCandidateDetailPage() {
   const [viewMode, setViewMode] = useState<'PROFILE' | 'CV'>('PROFILE');
   const [enlargedPhoto, setEnlargedPhoto] = useState<{ src: string; label: string } | null>(null);
   const [exporting, setExporting] = useState<'PNG' | 'PDF' | null>(null);
+  const [whatsappModalOpen, setWhatsappModalOpen] = useState(false);
   const [statusNote, setStatusNote] = useState<string | null>(null);
   const [exportError, setExportError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
@@ -115,68 +120,6 @@ export function AgentCandidateDetailPage() {
     }
   };
 
-  const renderCvToPngDataUrl = async (node: HTMLElement): Promise<string> => {
-    try {
-      if (document.fonts?.ready) {
-        await document.fonts.ready;
-      }
-    } catch {
-      // Proceed even if font readiness rejects
-    }
-
-    const imgs = Array.from(node.querySelectorAll('img'));
-    const originalSrcs: Array<{ img: HTMLImageElement; src: string }> = [];
-
-    try {
-      await Promise.all(
-        imgs.map(async (img) => {
-          const currentSrc = img.getAttribute('src') || img.src;
-          if (!currentSrc) return;
-          if (!currentSrc.startsWith('data:')) {
-            originalSrcs.push({ img, src: currentSrc });
-            try {
-              const dataUrl = await fetchAuthenticatedDataUrl(currentSrc);
-              img.src = dataUrl;
-            } catch {
-              // Keep original src if inline fetch fails
-            }
-          }
-          if (!img.complete) {
-            await new Promise<void>((resolve) => {
-              img.onload = () => resolve();
-              img.onerror = () => resolve();
-            });
-          }
-          if (typeof img.decode === 'function') {
-            await img.decode().catch(() => undefined);
-          }
-        })
-      );
-
-      const baseOptions = {
-        pixelRatio: 2,
-        cacheBust: false,
-        backgroundColor: '#ffffff',
-        width: 794,
-        height: 1123,
-        style: {
-          margin: '0',
-          transform: 'none',
-        },
-      };
-
-      try {
-        return await toPng(node, baseOptions);
-      } catch {
-        return await toPng(node, { ...baseOptions, skipFonts: true });
-      }
-    } finally {
-      for (const item of originalSrcs) {
-        item.img.setAttribute('src', item.src);
-      }
-    }
-  };
-
   const handleDownloadPng = async () => {
     const node = cvExportRef.current;
     if (!node || !candidate) return;
@@ -184,12 +127,10 @@ export function AgentCandidateDetailPage() {
     setStatusNote(null);
     setExportError(null);
     try {
-      const dataUrl = await renderCvToPngDataUrl(node);
-      const blob = dataUrlToBlob(dataUrl);
-      const filename = `${candidate.workerCode}_CV_${language}.png`;
-      triggerBlobDownload(blob, filename);
+      const payload = await generateCvExportPayload(node, candidate.workerCode, language, 'PNG');
+      triggerBlobDownload(payload.blob, payload.fileName);
       await recordLog('PNG');
-      setStatusNote(`Downloaded ${filename}`);
+      setStatusNote(`Downloaded ${payload.fileName}`);
     } catch (err) {
       setExportError(
         err instanceof Error && err.message
@@ -208,18 +149,10 @@ export function AgentCandidateDetailPage() {
     setStatusNote(null);
     setExportError(null);
     try {
-      const dataUrl = await renderCvToPngDataUrl(node);
-      const pdf = new jsPDF({
-        orientation: 'portrait',
-        unit: 'mm',
-        format: 'a4',
-      });
-      pdf.addImage(dataUrl, 'PNG', 0, 0, 210, 297, undefined, 'FAST');
-      const filename = `${candidate.workerCode}_CV_${language}.pdf`;
-      const pdfBlob = pdf.output('blob');
-      triggerBlobDownload(pdfBlob, filename);
+      const payload = await generateCvExportPayload(node, candidate.workerCode, language, 'PDF');
+      triggerBlobDownload(payload.blob, payload.fileName);
       await recordLog('PDF');
-      setStatusNote(`Downloaded ${filename}`);
+      setStatusNote(`Downloaded ${payload.fileName}`);
     } catch (err) {
       setExportError(
         err instanceof Error && err.message
@@ -390,6 +323,17 @@ export function AgentCandidateDetailPage() {
               {!exportError && statusNote && (
                 <span className="text-xs font-medium text-emerald-700">{statusNote}</span>
               )}
+              {user?.role === 'AGENT' && (
+                <button
+                  type="button"
+                  onClick={() => setWhatsappModalOpen(true)}
+                  className="inline-flex items-center gap-2 rounded-lg border border-emerald-600 bg-emerald-600 px-4 py-2 text-xs font-semibold text-white transition-colors hover:bg-emerald-700 whitespace-nowrap shrink-0"
+                >
+                  <MessageCircle className="h-4 w-4" />
+                  <span>Send via WhatsApp</span>
+                </button>
+              )}
+
               <button
                 type="button"
                 disabled={exporting !== null}
@@ -822,6 +766,20 @@ export function AgentCandidateDetailPage() {
             />
           </div>
         </div>
+      )}
+      {/* Send CV via WhatsApp Modal */}
+      {candidate && user?.role === 'AGENT' && (
+        <SendCvWhatsAppModal
+          isOpen={whatsappModalOpen}
+          onClose={() => setWhatsappModalOpen(false)}
+          worker={candidate}
+          companyOverride={company}
+          templateOverride={template}
+          initialLanguage={language}
+          onSent={() => {
+            setStatusNote(`WhatsApp CV dispatch logged for ${candidate.workerCode}`);
+          }}
+        />
       )}
     </DashboardShell>
   );

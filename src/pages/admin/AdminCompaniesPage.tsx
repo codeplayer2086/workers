@@ -1,7 +1,8 @@
 import React, { useEffect, useState } from 'react';
-import { Building2, Palette, Plus, Upload } from 'lucide-react';
+import { Building2, Palette, Plus, Sparkles, Trash2, Upload } from 'lucide-react';
 import { DashboardShell } from '../../components/layout/DashboardShell';
 import { apiFetch } from '../../lib/api';
+import { transliterateCompanyNameToArabicFallback } from '../../lib/cv-dictionary';
 import type { Company, CompanyCvTemplate } from '../../types/portal';
 
 export function AdminCompaniesPage() {
@@ -15,16 +16,20 @@ export function AdminCompaniesPage() {
   // New Company Form State
   const [newNameEn, setNewNameEn] = useState('');
   const [newNameAr, setNewNameAr] = useState('');
+  const [arabicManuallyEdited, setArabicManuallyEdited] = useState(false);
+  const [translatingAr, setTranslatingAr] = useState(false);
   const [newCountry, setNewCountry] = useState('Saudi Arabia');
   const [newLicense, setNewLicense] = useState('');
   const [newEmail, setNewEmail] = useState('');
   const [newPhone, setNewPhone] = useState('');
   const [newAddress, setNewAddress] = useState('');
 
-  // Template Editor State
+  // Template Editor & Delete Modal State
   const [tpl, setTpl] = useState<CompanyCvTemplate | null>(null);
   const [savingTpl, setSavingTpl] = useState(false);
   const [uploadingLogo, setUploadingLogo] = useState(false);
+  const [deleteTarget, setDeleteTarget] = useState<Company | null>(null);
+  const [deletingCompany, setDeletingCompany] = useState(false);
 
   const loadCompanies = async () => {
     setLoading(true);
@@ -49,12 +54,46 @@ export function AdminCompaniesPage() {
     void loadCompanies();
   }, []);
 
+  // Debounced server-side Arabic refinement (Gemini if configured, else deterministic dictionary)
+  useEffect(() => {
+    if (!showCreateForm || arabicManuallyEdited) return;
+    const trimmed = newNameEn.trim();
+    if (!trimmed) {
+      setNewNameAr('');
+      return;
+    }
+    const timer = setTimeout(async () => {
+      setTranslatingAr(true);
+      try {
+        const res = await apiFetch<{ nameAr: string }>('/api/companies/translate-preview', {
+          method: 'POST',
+          body: JSON.stringify({ nameEn: trimmed }),
+        });
+        if (!arabicManuallyEdited && res.nameAr) {
+          setNewNameAr(res.nameAr);
+        }
+      } catch {
+        // Fallback already applied live
+      } finally {
+        setTranslatingAr(false);
+      }
+    }, 450);
+    return () => clearTimeout(timer);
+  }, [newNameEn, showCreateForm, arabicManuallyEdited]);
+
   const selectedCompany = companies.find((c) => c.id === selectedId) ?? null;
 
   const handleSelectCompany = (comp: Company) => {
     setSelectedId(comp.id);
     setTpl(comp.template ?? null);
     setFeedback(null);
+  };
+
+  const handleEnglishNameChange = (value: string) => {
+    setNewNameEn(value);
+    if (!arabicManuallyEdited) {
+      setNewNameAr(transliterateCompanyNameToArabicFallback(value));
+    }
   };
 
   const handleCreateCompany = async (e: React.FormEvent) => {
@@ -80,13 +119,37 @@ export function AdminCompaniesPage() {
       setShowCreateForm(false);
       setNewNameEn('');
       setNewNameAr('');
+      setArabicManuallyEdited(false);
       setNewLicense('');
       setNewEmail('');
       setNewPhone('');
       setNewAddress('');
-      setFeedback(`Registered ${created.nameEn} with a default CV template.`);
+      setFeedback(`Registered ${created.nameEn} (${created.nameAr}) with a default CV template.`);
     } catch (err) {
       setError(err instanceof Error ? err.message : 'Failed to create company');
+    }
+  };
+
+  const handleConfirmDeleteCompany = async () => {
+    if (!deleteTarget) return;
+    setDeletingCompany(true);
+    setError(null);
+    setFeedback(null);
+    try {
+      await apiFetch(`/api/admin/companies/${deleteTarget.id}`, { method: 'DELETE' });
+      const remaining = companies.filter((c) => c.id !== deleteTarget.id);
+      setCompanies(remaining);
+      if (selectedId === deleteTarget.id) {
+        const nextComp = remaining[0] ?? null;
+        setSelectedId(nextComp?.id ?? null);
+        setTpl(nextComp?.template ?? null);
+      }
+      setFeedback(`Deleted ${deleteTarget.nameEn} and its associated partner portal data.`);
+      setDeleteTarget(null);
+    } catch (err) {
+      setError(err instanceof Error ? err.message : 'Failed to delete company');
+    } finally {
+      setDeletingCompany(false);
     }
   };
 
@@ -195,23 +258,31 @@ export function AdminCompaniesPage() {
                   type="text"
                   required
                   value={newNameEn}
-                  onChange={(e) => setNewNameEn(e.target.value)}
+                  onChange={(e) => handleEnglishNameChange(e.target.value)}
                   placeholder="e.g., Al-Watan Manpower Co."
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
                 />
               </div>
               <div>
-                <label className="block text-xs font-medium text-slate-700">
-                  Company Name (Arabic) *
-                </label>
+                <div className="flex items-center justify-between">
+                  <label className="block text-xs font-medium text-slate-700">
+                    Company Name (Arabic — Auto-generated)
+                  </label>
+                  <span className="inline-flex items-center gap-1 text-[11px] font-medium text-sky-700">
+                    <Sparkles className="h-3 w-3" />
+                    {translatingAr ? 'Refining Arabic...' : 'Auto Arabic'}
+                  </span>
+                </div>
                 <input
                   type="text"
-                  required
                   dir="rtl"
                   value={newNameAr}
-                  onChange={(e) => setNewNameAr(e.target.value)}
-                  placeholder="مثال: شركة الوطن للاستقدام"
-                  className="font-arabic mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
+                  onChange={(e) => {
+                    setArabicManuallyEdited(e.target.value.trim().length > 0);
+                    setNewNameAr(e.target.value);
+                  }}
+                  placeholder="تظهر الترجمة العربية تلقائياً أثناء الكتابة"
+                  className="font-arabic mt-1 w-full rounded-lg border border-slate-300 bg-slate-50 px-3 py-2 text-sm"
                 />
               </div>
               <div>
@@ -346,22 +417,35 @@ export function AdminCompaniesPage() {
                       <h2 className="font-display text-base font-bold text-slate-900">
                         {selectedCompany.nameEn}
                       </h2>
-                      <p className="text-xs text-slate-500">
+                      <p dir="rtl" className="font-arabic text-xs text-slate-600">
+                        {selectedCompany.nameAr}
+                      </p>
+                      <p className="text-[11px] text-slate-500">
                         Fixed Company-Branded CV Template Configuration
                       </p>
                     </div>
                   </div>
 
-                  <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
-                    <Upload className="h-3.5 w-3.5" />
-                    <span>{uploadingLogo ? 'Uploading...' : 'Upload Logo'}</span>
-                    <input
-                      type="file"
-                      accept="image/*"
-                      onChange={handleLogoUpload}
-                      className="sr-only"
-                    />
-                  </label>
+                  <div className="flex flex-wrap items-center gap-2">
+                    <label className="inline-flex cursor-pointer items-center gap-2 rounded-lg border border-slate-300 bg-white px-3 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50">
+                      <Upload className="h-3.5 w-3.5" />
+                      <span>{uploadingLogo ? 'Uploading...' : 'Upload Logo'}</span>
+                      <input
+                        type="file"
+                        accept="image/*"
+                        onChange={handleLogoUpload}
+                        className="sr-only"
+                      />
+                    </label>
+                    <button
+                      type="button"
+                      onClick={() => setDeleteTarget(selectedCompany)}
+                      className="inline-flex items-center gap-1.5 rounded-lg border border-red-200 bg-red-50 px-3 py-2 text-xs font-semibold text-red-700 hover:bg-red-100"
+                    >
+                      <Trash2 className="h-3.5 w-3.5" />
+                      <span>Delete Company</span>
+                    </button>
+                  </div>
                 </div>
 
                 {/* Color Palette */}
@@ -558,6 +642,49 @@ export function AdminCompaniesPage() {
           </div>
         </div>
       </div>
+
+      {deleteTarget && (
+        <div
+          className="fixed inset-0 z-50 flex items-center justify-center bg-slate-900/50 p-4"
+          role="dialog"
+          aria-modal="true"
+          aria-labelledby="delete-company-dialog-title"
+        >
+          <div className="w-full max-w-md rounded-2xl border border-slate-200 bg-white p-6 shadow-xl">
+            <h3
+              id="delete-company-dialog-title"
+              className="font-display text-base font-bold text-slate-900"
+            >
+              Delete {deleteTarget.nameEn}?
+            </h3>
+            <p className="mt-2 text-xs leading-relaxed text-slate-600">
+              This permanently removes this partner company and its CV branding template.{' '}
+              {(deleteTarget.agentCount ?? 0) > 0
+                ? `${deleteTarget.agentCount} assigned agent account(s) will also be removed. `
+                : ''}
+              Registered workers will stay safely in the central directory.
+            </p>
+            <div className="mt-5 flex justify-end gap-3">
+              <button
+                type="button"
+                disabled={deletingCompany}
+                onClick={() => setDeleteTarget(null)}
+                className="rounded-lg border border-slate-300 px-4 py-2 text-xs font-semibold text-slate-700 hover:bg-slate-50"
+              >
+                Cancel
+              </button>
+              <button
+                type="button"
+                disabled={deletingCompany}
+                onClick={handleConfirmDeleteCompany}
+                className="rounded-lg bg-red-700 px-4 py-2 text-xs font-semibold text-white hover:bg-red-800 disabled:opacity-50"
+              >
+                {deletingCompany ? 'Deleting...' : 'Delete Company'}
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </DashboardShell>
   );
 }

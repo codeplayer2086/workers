@@ -1,5 +1,8 @@
 import { GoogleGenAI, Type } from '@google/genai';
-import { transliterateTextToArabicFallback } from './cv-dictionary.ts';
+import {
+  transliterateCompanyNameToArabicFallback,
+  transliterateTextToArabicFallback,
+} from './cv-dictionary.ts';
 
 let aiClient: GoogleGenAI | null = null;
 
@@ -81,3 +84,40 @@ export async function translateWorkerFieldsToArabic(input: {
     return fallback;
   }
 }
+
+export async function translateCompanyNameToArabic(nameEn: string): Promise<string> {
+  const cleaned = nameEn.trim();
+  if (!cleaned) return '';
+
+  const fallback = transliterateCompanyNameToArabicFallback(cleaned);
+  const ai = getAiClient();
+  if (!ai) {
+    return fallback;
+  }
+
+  try {
+    const response = await ai.models.generateContent({
+      model: 'gemini-4-hydrogen',
+      contents: JSON.stringify({ companyNameEn: cleaned }),
+      config: {
+        systemInstruction:
+          'You are an official Saudi/GCC recruitment agency naming translator. Translate and transliterate companyNameEn into natural, formal Arabic used on official recruitment office headers in Saudi Arabia (e.g., شركة ... للاستقدام). Return only JSON matching the schema.',
+        responseMimeType: 'application/json',
+        responseSchema: {
+          type: Type.OBJECT,
+          properties: {
+            nameAr: { type: Type.STRING },
+          },
+        },
+      },
+    });
+    const raw = (response.text ?? '').trim();
+    if (!raw) return fallback;
+    const parsed = JSON.parse(raw) as { nameAr?: string };
+    return parsed.nameAr?.trim() || fallback;
+  } catch (err) {
+    console.warn('Gemini company Arabic translation fallback triggered:', err);
+    return fallback;
+  }
+}
+

@@ -14,6 +14,8 @@ import { WorkerEditPage } from './pages/employee/WorkerEditPage';
 import { AgentOverviewPage } from './pages/agent/AgentOverviewPage';
 import { AgentCandidatesPage } from './pages/agent/AgentCandidatesPage';
 import { AgentCandidateDetailPage } from './pages/agent/AgentCandidateDetailPage';
+import { AgentCustomersPage } from './pages/agent/AgentCustomersPage';
+import { ProfilePage } from './pages/ProfilePage';
 import type { UserRole } from './lib/validation';
 
 function HomeRedirect() {
@@ -157,6 +159,31 @@ export default function App() {
             element={
               <RequireRole roles={['AGENT', 'ADMIN', 'EMPLOYEE']}>
                 <AgentCandidateDetailPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/agent/customers"
+            element={
+              <RequireRole roles={['AGENT']}>
+                <AgentCustomersPage />
+              </RequireRole>
+            }
+          />
+          <Route
+            path="/dashboard/agent/customers"
+            element={
+              <RequireRole roles={['AGENT']}>
+                <AgentCustomersPage />
+              </RequireRole>
+            }
+          />
+
+          <Route
+            path="/profile"
+            element={
+              <RequireRole roles={['ADMIN', 'EMPLOYEE', 'AGENT']}>
+                <ProfilePage />
               </RequireRole>
             }
           />

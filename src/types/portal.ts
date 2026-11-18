@@ -14,6 +14,29 @@ export interface PortalUser {
   isActive: boolean;
 }
 
+export interface AdminAgentRow {
+  id: string;
+  fullName: string;
+  email: string;
+  role: 'AGENT';
+  companyId: string | null;
+  companyNameEn: string | null;
+  companyNameAr: string | null;
+  isActive: boolean;
+  createdAt: string;
+  visiblePassword: string | null;
+}
+
+export interface AdminEmployeeRow {
+  id: string;
+  fullName: string;
+  email: string;
+  role: 'EMPLOYEE';
+  isActive: boolean;
+  createdAt: string;
+  visiblePassword: string | null;
+}
+
 export interface CompanyCvTemplate {
   id: string;
   companyId: string;
@@ -143,3 +166,43 @@ export interface AuditLogItem {
   actorName: string | null;
   actorRole: UserRole | null;
 }
+
+export interface CvShareLogItem {
+  id: string;
+  agentId: string;
+  customerId: string;
+  workerId: string;
+  language: 'EN' | 'AR';
+  format: 'PDF' | 'PNG';
+  status: 'SENT' | 'FAILED';
+  errorMsg: string | null;
+  sentAt: string;
+  workerCode?: string;
+  workerNameEn?: string;
+  workerNameAr?: string | null;
+  occupationCode?: string;
+}
+
+export interface AgentCustomerItem {
+  id: string;
+  agentId: string;
+  fullName: string;
+  countryCode: string;
+  phoneNumber: string;
+  whatsappJid: string | null;
+  whatsappStatus: 'VERIFIED' | 'NOT_REGISTERED' | 'UNVERIFIED';
+  notes: string | null;
+  createdAt: string;
+  updatedAt: string;
+  shareLogs: CvShareLogItem[];
+}
+
+export interface WhatsAppSendResultItem {
+  customerId: string;
+  customerName: string;
+  phoneNumber: string;
+  status: 'SENT' | 'FAILED';
+  errorMsg: string | null;
+  logId: string;
+}
+

@@ -9,6 +9,7 @@ import {
   getSkillValueLabel,
   PROFILE_LABELS,
   SKILL_LABELS,
+  transliterateCompanyNameToArabicFallback,
   transliterateTextToArabicFallback,
 } from './cv-dictionary';
 
@@ -51,3 +52,16 @@ test('transliterateTextToArabicFallback converts Bangladeshi names and cities in
   assert.equal(transliterateTextToArabicFallback('Amina Begum'), 'أمينة بيجوم');
   assert.equal(transliterateTextToArabicFallback('Comilla, Bangladesh'), 'كوميلا بنغلاديش');
 });
+
+test('transliterateCompanyNameToArabicFallback translates English agency names into Arabic automatically', () => {
+  assert.equal(
+    transliterateCompanyNameToArabicFallback('Al-Watan Manpower Co.'),
+    'شركة الوطن للقوى العاملة'
+  );
+  assert.equal(
+    transliterateCompanyNameToArabicFallback('Al-Jazira International Recruitment'),
+    'الجزيرة الدولية للاستقدام'
+  );
+  assert.equal(transliterateCompanyNameToArabicFallback(''), '');
+});
+

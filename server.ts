@@ -5,13 +5,15 @@ import crypto from 'node:crypto';
 import express from 'express';
 import cookieParser from 'cookie-parser';
 import multer from 'multer';
-import { and, count, desc, eq, like, or } from 'drizzle-orm';
+import { and, count, desc, eq, inArray, like, or } from 'drizzle-orm';
 import { db } from './src/db/index.ts';
 import {
+  agentCustomers,
   auditLogs,
   companies,
   companyCvTemplates,
   cvDownloadLogs,
+  cvShareLogs,
   users,
   workerDocuments,
   workers,
@@ -28,12 +30,16 @@ import {
   type AuthRequest,
 } from './src/lib/server-auth.ts';
 import {
+  adminUpdateUserSchema,
   companyCreateSchema,
   contractWorkerSchema,
+  createAgentCustomerSchema,
   createAgentSchema,
   createEmployeeSchema,
   cvLogSchema,
   cvTemplateUpdateSchema,
+  selfProfileUpdateSchema,
+  sendCvWhatsAppSchema,
   workerInputSchema,
 } from './src/lib/validation.ts';
 import {
@@ -42,7 +48,11 @@ import {
   savePrivateDocumentFile,
   type PrivateFileBucket,
 } from './src/lib/image-storage.ts';
-import { translateWorkerFieldsToArabic } from './src/lib/arabic-translator.ts';
+import {
+  translateCompanyNameToArabic,
+  translateWorkerFieldsToArabic,
+} from './src/lib/arabic-translator.ts';
+import { decryptPasswordForAdmin, encryptPasswordForAdmin } from './src/lib/password-vault.ts';
 import { calculateAge } from './src/lib/cv-dictionary.ts';
 import { isMysqlConfigured } from './src/lib/runtime-config.ts';
 import {
@@ -50,6 +60,17 @@ import {
   buildOccupationBreakdown,
   buildWorkerAlerts,
 } from './src/lib/admin-analytics.ts';
+import {
+  buildWhatsAppCvCaption,
+  normalizeWhatsAppPhone,
+  type WhatsAppVerificationStatus,
+} from './src/lib/whatsapp-utils.ts';
+import {
+  GatewayNotConfiguredError,
+  getCentralGatewayStatus,
+  sendCvMediaViaCentralWhatsApp,
+  verifyNumberOnCentralWhatsApp,
+} from './src/lib/whatsapp-gateway.ts';
 
 const PORT = Number(process.env.PORT || 3000);
 const upload = multer({
@@ -76,6 +97,23 @@ async function writeAudit(
   } catch (err) {
     console.error('Failed to write audit log:', err);
   }
+}
+
+async function deleteUserSafely(targetUserId: string, adminActorId: string): Promise<void> {
+  await db
+    .update(workers)
+    .set({ registeredById: adminActorId })
+    .where(eq(workers.registeredById, targetUserId));
+  await db
+    .update(workers)
+    .set({ updatedById: null })
+    .where(eq(workers.updatedById, targetUserId));
+  await db
+    .update(auditLogs)
+    .set({ actorId: null })
+    .where(eq(auditLogs.actorId, targetUserId));
+  await db.delete(cvDownloadLogs).where(eq(cvDownloadLogs.agentId, targetUserId));
+  await db.delete(users).where(eq(users.id, targetUserId));
 }
 
 async function generateNextWorkerCode(): Promise<string> {
@@ -137,7 +175,7 @@ async function getUserContextPayload(userId: string) {
 async function startServer() {
   const app = express();
   app.set('trust proxy', 1);
-  app.use(express.json({ limit: '4mb' }));
+  app.use(express.json({ limit: '16mb' }));
   app.use(cookieParser());
 
   app.get('/api/health', (_req, res) => {
@@ -237,6 +275,73 @@ async function startServer() {
     } catch (err) {
       console.error('Auth me error:', err);
       res.status(500).json({ error: 'Failed to load profile' });
+    }
+  });
+
+  // ── SELF-SERVICE PROFILE (ADMIN, EMPLOYEE, AGENT) ───────────────────────────
+  app.get('/api/profile', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const context = await getUserContextPayload(req.currentUser!.id);
+      if (!context) {
+        res.status(404).json({ error: 'Account not found' });
+        return;
+      }
+      res.json(context);
+    } catch (err) {
+      console.error('Get profile error:', err);
+      res.status(500).json({ error: 'Failed to load profile details' });
+    }
+  });
+
+  app.put('/api/profile', requireAuth, async (req: AuthRequest, res) => {
+    try {
+      const userId = req.currentUser!.id;
+      const parsed = selfProfileUpdateSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid profile update' });
+        return;
+      }
+
+      const normalizedEmail = parsed.data.email.trim().toLowerCase();
+      const [dup] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, normalizedEmail))
+        .limit(1);
+      if (dup && dup.id !== userId) {
+        res.status(409).json({ error: 'Another account already uses this email address' });
+        return;
+      }
+
+      const updateValues: {
+        fullName: string;
+        email: string;
+        updatedAt: Date;
+        passwordHash?: string;
+        encryptedPassword?: string;
+      } = {
+        fullName: parsed.data.fullName,
+        email: normalizedEmail,
+        updatedAt: new Date(),
+      };
+
+      if (parsed.data.password) {
+        updateValues.passwordHash = hashPassword(parsed.data.password);
+        updateValues.encryptedPassword = encryptPasswordForAdmin(parsed.data.password);
+      }
+
+      await db.update(users).set(updateValues).where(eq(users.id, userId));
+
+      await writeAudit(userId, 'PROFILE_UPDATED', 'User', userId, {
+        email: normalizedEmail,
+        passwordChanged: Boolean(parsed.data.password),
+      });
+
+      const context = await getUserContextPayload(userId);
+      res.json(context);
+    } catch (err) {
+      console.error('Update profile error:', err);
+      res.status(500).json({ error: 'Failed to update profile' });
     }
   });
 
@@ -411,6 +516,22 @@ async function startServer() {
     }
   );
 
+  app.post(
+    '/api/companies/translate-preview',
+    requireAuth,
+    requireRole('ADMIN'),
+    async (req, res) => {
+      try {
+        const nameEn = String(req.body?.nameEn ?? '');
+        const nameAr = await translateCompanyNameToArabic(nameEn);
+        res.json({ nameAr });
+      } catch (err) {
+        console.error('Company Arabic translate error:', err);
+        res.status(500).json({ error: 'Company name translation failed' });
+      }
+    }
+  );
+
   app.post('/api/admin/companies', requireAuth, requireRole('ADMIN'), async (req: AuthRequest, res) => {
     try {
       const parsed = companyCreateSchema.safeParse(req.body);
@@ -419,11 +540,14 @@ async function startServer() {
         return;
       }
 
+      const resolvedNameAr =
+        parsed.data.nameAr.trim() || (await translateCompanyNameToArabic(parsed.data.nameEn));
+
       const id = `comp_${crypto.randomUUID().slice(0, 10)}`;
       await db.insert(companies).values({
         id,
         nameEn: parsed.data.nameEn,
-        nameAr: parsed.data.nameAr,
+        nameAr: resolvedNameAr,
         country: parsed.data.country,
         licenseNumber: parsed.data.licenseNumber || null,
         address: parsed.data.address || null,
@@ -440,7 +564,7 @@ async function startServer() {
         secondaryColor: '#F1F5F9',
         accentColor: '#0284C7',
         headerTextEn: `${parsed.data.nameEn} — Candidate Recruitment Dossier`,
-        headerTextAr: `${parsed.data.nameAr} — ملف السيرة الذاتية للمرشح`,
+        headerTextAr: `${resolvedNameAr} — ملف السيرة الذاتية للمرشح`,
         footerTextEn: 'Verified by Dhaka Placement Office',
         footerTextAr: 'ملف موثق من مكتب الإرسال في دكا',
         visibleFields: {
@@ -462,6 +586,7 @@ async function startServer() {
 
       await writeAudit(req.currentUser!.id, 'COMPANY_CREATED', 'Company', id, {
         nameEn: created.nameEn,
+        nameAr: created.nameAr,
       });
 
       res.status(201).json({ ...created, template: tpl, agentCount: 0 });
@@ -479,11 +604,13 @@ async function startServer() {
         res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid company payload' });
         return;
       }
+      const resolvedNameAr =
+        parsed.data.nameAr.trim() || (await translateCompanyNameToArabic(parsed.data.nameEn));
       await db
         .update(companies)
         .set({
           nameEn: parsed.data.nameEn,
-          nameAr: parsed.data.nameAr,
+          nameAr: resolvedNameAr,
           country: parsed.data.country,
           licenseNumber: parsed.data.licenseNumber || null,
           address: parsed.data.address || null,
@@ -503,6 +630,41 @@ async function startServer() {
     } catch (err) {
       console.error('Update company error:', err);
       res.status(500).json({ error: 'Failed to update company' });
+    }
+  });
+
+  app.delete('/api/admin/companies/:id', requireAuth, requireRole('ADMIN'), async (req: AuthRequest, res) => {
+    try {
+      const id = String(req.params.id);
+      const [existing] = await db.select().from(companies).where(eq(companies.id, id)).limit(1);
+      if (!existing) {
+        res.status(404).json({ error: 'Company not found' });
+        return;
+      }
+
+      await db
+        .update(workers)
+        .set({ contractedCompanyId: null })
+        .where(eq(workers.contractedCompanyId, id));
+      await db.delete(cvDownloadLogs).where(eq(cvDownloadLogs.companyId, id));
+
+      const companyAgents = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.companyId, id));
+      for (const agent of companyAgents) {
+        await deleteUserSafely(agent.id, req.currentUser!.id);
+      }
+
+      await db.delete(companies).where(eq(companies.id, id));
+      await writeAudit(req.currentUser!.id, 'COMPANY_DELETED', 'Company', id, {
+        nameEn: existing.nameEn,
+        deletedAgentCount: companyAgents.length,
+      });
+      res.json({ ok: true, id });
+    } catch (err) {
+      console.error('Delete company error:', err);
+      res.status(500).json({ error: 'Failed to delete company' });
     }
   });
 
@@ -600,6 +762,7 @@ async function startServer() {
           companyId: users.companyId,
           isActive: users.isActive,
           createdAt: users.createdAt,
+          encryptedPassword: users.encryptedPassword,
           companyNameEn: companies.nameEn,
           companyNameAr: companies.nameAr,
         })
@@ -607,7 +770,13 @@ async function startServer() {
         .leftJoin(companies, eq(users.companyId, companies.id))
         .where(eq(users.role, 'AGENT'))
         .orderBy(desc(users.createdAt));
-      res.json(rows);
+
+      res.json(
+        rows.map(({ encryptedPassword, ...rest }) => ({
+          ...rest,
+          visiblePassword: decryptPasswordForAdmin(encryptedPassword),
+        }))
+      );
     } catch (err) {
       console.error('Fetch agents error:', err);
       res.status(500).json({ error: 'Failed to load agents' });
@@ -649,6 +818,7 @@ async function startServer() {
         fullName: parsed.data.fullName,
         email: normalizedEmail,
         passwordHash: hashPassword(parsed.data.password),
+        encryptedPassword: encryptPasswordForAdmin(parsed.data.password),
         role: 'AGENT',
         companyId: company.id,
         isActive: true,
@@ -671,6 +841,7 @@ async function startServer() {
         createdAt: created.createdAt,
         companyNameEn: company.nameEn,
         companyNameAr: company.nameAr,
+        visiblePassword: parsed.data.password,
       });
     } catch (err) {
       console.error('Create agent error:', err);
@@ -688,11 +859,18 @@ async function startServer() {
           role: users.role,
           isActive: users.isActive,
           createdAt: users.createdAt,
+          encryptedPassword: users.encryptedPassword,
         })
         .from(users)
         .where(eq(users.role, 'EMPLOYEE'))
         .orderBy(desc(users.createdAt));
-      res.json(rows);
+
+      res.json(
+        rows.map(({ encryptedPassword, ...rest }) => ({
+          ...rest,
+          visiblePassword: decryptPasswordForAdmin(encryptedPassword),
+        }))
+      );
     } catch (err) {
       console.error('Fetch employees error:', err);
       res.status(500).json({ error: 'Failed to load employees' });
@@ -724,6 +902,7 @@ async function startServer() {
         fullName: parsed.data.fullName,
         email: normalizedEmail,
         passwordHash: hashPassword(parsed.data.password),
+        encryptedPassword: encryptPasswordForAdmin(parsed.data.password),
         role: 'EMPLOYEE',
         companyId: null,
         isActive: true,
@@ -742,10 +921,132 @@ async function startServer() {
         role: created.role,
         isActive: created.isActive,
         createdAt: created.createdAt,
+        visiblePassword: parsed.data.password,
       });
     } catch (err) {
       console.error('Create employee error:', err);
       res.status(500).json({ error: 'Failed to create employee account' });
+    }
+  });
+
+  app.put('/api/admin/users/:id', requireAuth, requireRole('ADMIN'), async (req: AuthRequest, res) => {
+    try {
+      const id = String(req.params.id);
+      const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+      if (!existing) {
+        res.status(404).json({ error: 'User account not found' });
+        return;
+      }
+
+      const parsed = adminUpdateUserSchema.safeParse(req.body);
+      if (!parsed.success) {
+        res.status(400).json({ error: parsed.error.issues[0]?.message || 'Invalid user update' });
+        return;
+      }
+
+      const normalizedEmail = parsed.data.email.trim().toLowerCase();
+      const [dup] = await db
+        .select({ id: users.id })
+        .from(users)
+        .where(eq(users.email, normalizedEmail))
+        .limit(1);
+      if (dup && dup.id !== id) {
+        res.status(409).json({ error: 'Another account already uses this email address' });
+        return;
+      }
+
+      let nextCompanyId = existing.companyId;
+      let companyNameEn: string | null = null;
+      let companyNameAr: string | null = null;
+
+      if (existing.role === 'AGENT') {
+        const targetCompanyId = parsed.data.companyId ?? existing.companyId;
+        if (!targetCompanyId) {
+          res.status(400).json({ error: 'Agent accounts must remain assigned to a company' });
+          return;
+        }
+        const [comp] = await db
+          .select()
+          .from(companies)
+          .where(eq(companies.id, targetCompanyId))
+          .limit(1);
+        if (!comp) {
+          res.status(400).json({ error: 'Selected international company does not exist' });
+          return;
+        }
+        nextCompanyId = comp.id;
+        companyNameEn = comp.nameEn;
+        companyNameAr = comp.nameAr;
+      }
+
+      const updateValues: {
+        fullName: string;
+        email: string;
+        companyId: string | null;
+        updatedAt: Date;
+        passwordHash?: string;
+        encryptedPassword?: string;
+      } = {
+        fullName: parsed.data.fullName,
+        email: normalizedEmail,
+        companyId: nextCompanyId,
+        updatedAt: new Date(),
+      };
+
+      if (parsed.data.password) {
+        updateValues.passwordHash = hashPassword(parsed.data.password);
+        updateValues.encryptedPassword = encryptPasswordForAdmin(parsed.data.password);
+      }
+
+      await db.update(users).set(updateValues).where(eq(users.id, id));
+      const [updated] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+
+      await writeAudit(req.currentUser!.id, 'USER_UPDATED_BY_ADMIN', 'User', id, {
+        email: normalizedEmail,
+        passwordChanged: Boolean(parsed.data.password),
+        role: existing.role,
+      });
+
+      res.json({
+        id: updated.id,
+        fullName: updated.fullName,
+        email: updated.email,
+        role: updated.role,
+        companyId: updated.companyId,
+        companyNameEn,
+        companyNameAr,
+        isActive: updated.isActive,
+        createdAt: updated.createdAt,
+        visiblePassword: decryptPasswordForAdmin(updated.encryptedPassword),
+      });
+    } catch (err) {
+      console.error('Admin update user error:', err);
+      res.status(500).json({ error: 'Failed to update user account' });
+    }
+  });
+
+  app.delete('/api/admin/users/:id', requireAuth, requireRole('ADMIN'), async (req: AuthRequest, res) => {
+    try {
+      const id = String(req.params.id);
+      if (id === req.currentUser!.id) {
+        res.status(400).json({ error: 'You cannot delete your own active Admin account' });
+        return;
+      }
+      const [existing] = await db.select().from(users).where(eq(users.id, id)).limit(1);
+      if (!existing) {
+        res.status(404).json({ error: 'User account not found' });
+        return;
+      }
+      await deleteUserSafely(id, req.currentUser!.id);
+      await writeAudit(req.currentUser!.id, 'USER_DELETED', 'User', id, {
+        fullName: existing.fullName,
+        email: existing.email,
+        role: existing.role,
+      });
+      res.json({ ok: true, id });
+    } catch (err) {
+      console.error('Delete user error:', err);
+      res.status(500).json({ error: 'Failed to delete user account' });
     }
   });
 
@@ -1408,10 +1709,29 @@ async function startServer() {
         .orderBy(desc(cvDownloadLogs.downloadedAt))
         .limit(8);
 
+      const agentCustomersRows = await db
+        .select({
+          id: agentCustomers.id,
+          whatsappStatus: agentCustomers.whatsappStatus,
+        })
+        .from(agentCustomers)
+        .where(eq(agentCustomers.agentId, req.currentUser!.id));
+
+      const shareCountRows = await db
+        .select({ value: count() })
+        .from(cvShareLogs)
+        .where(
+          and(eq(cvShareLogs.agentId, req.currentUser!.id), eq(cvShareLogs.status, 'SENT'))
+        );
+
       res.json({
         publishedCount: published.length,
         byOccupation,
         recentDownloads,
+        customerCount: agentCustomersRows.length,
+        verifiedCustomerCount: agentCustomersRows.filter((c) => c.whatsappStatus === 'VERIFIED')
+          .length,
+        whatsappSentCount: Number(shareCountRows[0]?.value ?? 0),
       });
     } catch (err) {
       console.error('Agent overview error:', err);
@@ -1645,6 +1965,438 @@ async function startServer() {
       } catch (err) {
         console.error('CV log error:', err);
         res.status(500).json({ error: 'Failed to record CV download' });
+      }
+    }
+  );
+
+  // ── PRIVATE AGENT CUSTOMER DIRECTORY & CENTRAL WHATSAPP CV SHARING ──────────
+  app.get('/api/whatsapp/status', requireAuth, requireRole('AGENT'), (_req, res) => {
+    res.json(getCentralGatewayStatus());
+  });
+
+  app.get(
+    '/api/whatsapp/customers',
+    requireAuth,
+    requireRole('AGENT'),
+    async (req: AuthRequest, res) => {
+      try {
+        const agentId = req.currentUser!.id;
+        const customers = await db
+          .select()
+          .from(agentCustomers)
+          .where(eq(agentCustomers.agentId, agentId))
+          .orderBy(desc(agentCustomers.updatedAt));
+
+        const logs = await db
+          .select({
+            id: cvShareLogs.id,
+            agentId: cvShareLogs.agentId,
+            customerId: cvShareLogs.customerId,
+            workerId: cvShareLogs.workerId,
+            language: cvShareLogs.language,
+            format: cvShareLogs.format,
+            status: cvShareLogs.status,
+            errorMsg: cvShareLogs.errorMsg,
+            sentAt: cvShareLogs.sentAt,
+            workerCode: workers.workerCode,
+            workerNameEn: workers.fullNameEn,
+            workerNameAr: workers.fullNameAr,
+            occupationCode: workers.occupationCode,
+          })
+          .from(cvShareLogs)
+          .innerJoin(workers, eq(cvShareLogs.workerId, workers.id))
+          .where(eq(cvShareLogs.agentId, agentId))
+          .orderBy(desc(cvShareLogs.sentAt));
+
+        const logsByCustomer = new Map<string, typeof logs>();
+        for (const row of logs) {
+          const arr = logsByCustomer.get(row.customerId) ?? [];
+          arr.push(row);
+          logsByCustomer.set(row.customerId, arr);
+        }
+
+        res.json({
+          gateway: getCentralGatewayStatus(),
+          customers: customers.map((c) => ({
+            ...c,
+            shareLogs: logsByCustomer.get(c.id) ?? [],
+          })),
+        });
+      } catch (err) {
+        console.error('List WhatsApp customers error:', err);
+        res.status(500).json({ error: 'Failed to load householder directory' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/whatsapp/customers',
+    requireAuth,
+    requireRole('AGENT'),
+    async (req: AuthRequest, res) => {
+      try {
+        const agentId = req.currentUser!.id;
+        const parsed = createAgentCustomerSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({
+            error: parsed.error.issues[0]?.message || 'Invalid customer details',
+          });
+          return;
+        }
+
+        let normalizedPhone: string;
+        try {
+          normalizedPhone = normalizeWhatsAppPhone(
+            parsed.data.countryCode,
+            parsed.data.phoneNumber
+          );
+        } catch (err) {
+          res.status(400).json({
+            error: err instanceof Error ? err.message : 'Invalid phone number',
+          });
+          return;
+        }
+
+        const existing = await db
+          .select({ id: agentCustomers.id })
+          .from(agentCustomers)
+          .where(
+            and(
+              eq(agentCustomers.agentId, agentId),
+              eq(agentCustomers.phoneNumber, normalizedPhone)
+            )
+          )
+          .limit(1);
+
+        if (existing.length > 0) {
+          res.status(409).json({
+            error: `Phone number +${normalizedPhone} is already saved in your customer directory`,
+          });
+          return;
+        }
+
+        let whatsappStatus: WhatsAppVerificationStatus = 'UNVERIFIED';
+        let whatsappJid: string | null = null;
+        let gatewayWarning: string | null = null;
+
+        try {
+          const check = await verifyNumberOnCentralWhatsApp(normalizedPhone);
+          if (check.isRegistered) {
+            whatsappStatus = 'VERIFIED';
+            whatsappJid = check.jid;
+          } else {
+            whatsappStatus = 'NOT_REGISTERED';
+            whatsappJid = null;
+          }
+        } catch (err) {
+          whatsappStatus = 'UNVERIFIED';
+          whatsappJid = null;
+          gatewayWarning =
+            err instanceof GatewayNotConfiguredError
+              ? err.message
+              : err instanceof Error
+                ? `WhatsApp check deferred (${err.message}). You can click Re-verify once the gateway is online.`
+                : 'Central WhatsApp gateway could not be reached right now.';
+        }
+
+        const id = `cust_${crypto.randomUUID().slice(0, 12)}`;
+        await db.insert(agentCustomers).values({
+          id,
+          agentId,
+          fullName: parsed.data.fullName,
+          countryCode: parsed.data.countryCode,
+          phoneNumber: normalizedPhone,
+          whatsappJid,
+          whatsappStatus,
+          notes: parsed.data.notes || null,
+        });
+
+        const [created] = await db
+          .select()
+          .from(agentCustomers)
+          .where(eq(agentCustomers.id, id))
+          .limit(1);
+
+        await writeAudit(agentId, 'AGENT_CUSTOMER_CREATED', 'AgentCustomer', id, {
+          phoneNumber: normalizedPhone,
+          whatsappStatus,
+        });
+
+        res.status(201).json({
+          customer: {
+            ...created,
+            shareLogs: [],
+          },
+          whatsappStatus,
+          gatewayWarning,
+        });
+      } catch (err) {
+        console.error('Create WhatsApp customer error:', err);
+        res.status(500).json({ error: 'Failed to save customer' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/whatsapp/customers/:id/verify',
+    requireAuth,
+    requireRole('AGENT'),
+    async (req: AuthRequest, res) => {
+      try {
+        const agentId = req.currentUser!.id;
+        const id = String(req.params.id);
+
+        const [customer] = await db
+          .select()
+          .from(agentCustomers)
+          .where(and(eq(agentCustomers.id, id), eq(agentCustomers.agentId, agentId)))
+          .limit(1);
+
+        if (!customer) {
+          res.status(404).json({ error: 'Customer not found in your private directory' });
+          return;
+        }
+
+        let check: { isRegistered: boolean; jid: string | null };
+        try {
+          check = await verifyNumberOnCentralWhatsApp(customer.phoneNumber);
+        } catch (err) {
+          if (err instanceof GatewayNotConfiguredError) {
+            res.status(500).json({ error: err.message });
+            return;
+          }
+          res.status(502).json({
+            error:
+              err instanceof Error
+                ? `WhatsApp gateway verification failed: ${err.message}`
+                : 'Unable to reach central WhatsApp gateway',
+          });
+          return;
+        }
+
+        const nextStatus: WhatsAppVerificationStatus = check.isRegistered
+          ? 'VERIFIED'
+          : 'NOT_REGISTERED';
+        const nextJid = check.isRegistered ? check.jid : null;
+
+        await db
+          .update(agentCustomers)
+          .set({
+            whatsappStatus: nextStatus,
+            whatsappJid: nextJid,
+            updatedAt: new Date(),
+          })
+          .where(and(eq(agentCustomers.id, id), eq(agentCustomers.agentId, agentId)));
+
+        const [updated] = await db
+          .select()
+          .from(agentCustomers)
+          .where(eq(agentCustomers.id, id))
+          .limit(1);
+
+        await writeAudit(agentId, 'AGENT_CUSTOMER_VERIFIED', 'AgentCustomer', id, {
+          whatsappStatus: nextStatus,
+        });
+
+        res.json({ customer: updated });
+      } catch (err) {
+        console.error('Re-verify WhatsApp customer error:', err);
+        res.status(500).json({ error: 'Failed to re-verify WhatsApp number' });
+      }
+    }
+  );
+
+  app.delete(
+    '/api/whatsapp/customers/:id',
+    requireAuth,
+    requireRole('AGENT'),
+    async (req: AuthRequest, res) => {
+      try {
+        const agentId = req.currentUser!.id;
+        const id = String(req.params.id);
+
+        const [existing] = await db
+          .select({ id: agentCustomers.id })
+          .from(agentCustomers)
+          .where(and(eq(agentCustomers.id, id), eq(agentCustomers.agentId, agentId)))
+          .limit(1);
+
+        if (!existing) {
+          res.status(404).json({ error: 'Customer not found in your directory' });
+          return;
+        }
+
+        await db
+          .delete(agentCustomers)
+          .where(and(eq(agentCustomers.id, id), eq(agentCustomers.agentId, agentId)));
+
+        await writeAudit(agentId, 'AGENT_CUSTOMER_DELETED', 'AgentCustomer', id);
+        res.json({ ok: true });
+      } catch (err) {
+        console.error('Delete WhatsApp customer error:', err);
+        res.status(500).json({ error: 'Failed to delete customer' });
+      }
+    }
+  );
+
+  app.post(
+    '/api/whatsapp/send-cv',
+    requireAuth,
+    requireRole('AGENT'),
+    async (req: AuthRequest, res) => {
+      try {
+        const agentId = req.currentUser!.id;
+        const gateway = getCentralGatewayStatus();
+        if (!gateway.configured) {
+          res.status(500).json({
+            error:
+              'Central WhatsApp gateway is not configured. Set WHATSAPP_GATEWAY_URL, WHATSAPP_GATEWAY_API_KEY, and WHATSAPP_CENTRAL_INSTANCE in .env.',
+          });
+          return;
+        }
+
+        const parsed = sendCvWhatsAppSchema.safeParse(req.body);
+        if (!parsed.success) {
+          res.status(400).json({
+            error: parsed.error.issues[0]?.message || 'Invalid WhatsApp CV dispatch payload',
+          });
+          return;
+        }
+
+        const data = parsed.data;
+        const uniqueCustomerIds = Array.from(new Set(data.customerIds));
+
+        const [worker] = await db
+          .select({
+            id: workers.id,
+            workerCode: workers.workerCode,
+            fullNameEn: workers.fullNameEn,
+            fullNameAr: workers.fullNameAr,
+            status: workers.status,
+          })
+          .from(workers)
+          .where(eq(workers.id, data.workerId))
+          .limit(1);
+
+        if (!worker || worker.status !== 'PUBLISHED') {
+          res.status(404).json({ error: 'Published candidate not found' });
+          return;
+        }
+
+        const recipients = await db
+          .select()
+          .from(agentCustomers)
+          .where(
+            and(
+              eq(agentCustomers.agentId, agentId),
+              inArray(agentCustomers.id, uniqueCustomerIds)
+            )
+          );
+
+        if (recipients.length !== uniqueCustomerIds.length) {
+          res.status(403).json({
+            error: 'One or more selected recipients do not belong to your private customer directory',
+          });
+          return;
+        }
+
+        const unverified = recipients.filter((r) => r.whatsappStatus !== 'VERIFIED');
+        if (unverified.length > 0) {
+          res.status(400).json({
+            error: `Only WhatsApp-verified householders can receive CVs. Unverified: ${unverified
+              .map((u) => u.fullName)
+              .join(', ')}`,
+          });
+          return;
+        }
+
+        let companyName = 'Partner Agency';
+        if (req.currentUser!.companyId) {
+          const [comp] = await db
+            .select({ nameEn: companies.nameEn })
+            .from(companies)
+            .where(eq(companies.id, req.currentUser!.companyId))
+            .limit(1);
+          if (comp?.nameEn) companyName = comp.nameEn;
+        }
+
+        const signedCaption = buildWhatsAppCvCaption({
+          customCaption: data.caption,
+          agentName: req.currentUser!.fullName,
+          companyName,
+          workerCode: worker.workerCode,
+          workerName:
+            data.language === 'AR' ? worker.fullNameAr || worker.fullNameEn : worker.fullNameEn,
+          language: data.language,
+        });
+
+        const results: Array<{
+          customerId: string;
+          customerName: string;
+          phoneNumber: string;
+          status: 'SENT' | 'FAILED';
+          errorMsg: string | null;
+          logId: string;
+        }> = [];
+
+        for (const recipient of recipients) {
+          const dispatch = await sendCvMediaViaCentralWhatsApp({
+            recipientJidOrPhone: recipient.whatsappJid || recipient.phoneNumber,
+            format: data.format,
+            fileBase64: data.fileBase64,
+            fileName: data.fileName,
+            caption: signedCaption,
+          });
+
+          const status: 'SENT' | 'FAILED' = dispatch.ok ? 'SENT' : 'FAILED';
+          const errorMsg = dispatch.ok ? null : dispatch.errorMsg || 'Dispatch failed';
+          const logId = `shlog_${crypto.randomUUID().slice(0, 12)}`;
+
+          await db.insert(cvShareLogs).values({
+            id: logId,
+            agentId,
+            customerId: recipient.id,
+            workerId: worker.id,
+            language: data.language,
+            format: data.format,
+            status,
+            errorMsg,
+          });
+
+          results.push({
+            customerId: recipient.id,
+            customerName: recipient.fullName,
+            phoneNumber: recipient.phoneNumber,
+            status,
+            errorMsg,
+            logId,
+          });
+        }
+
+        const sentCount = results.filter((r) => r.status === 'SENT').length;
+        const failedCount = results.length - sentCount;
+
+        await writeAudit(agentId, 'CV_SENT_WHATSAPP', 'Worker', worker.id, {
+          workerCode: worker.workerCode,
+          language: data.language,
+          format: data.format,
+          sentCount,
+          failedCount,
+        });
+
+        res.json({
+          sentCount,
+          failedCount,
+          signedCaption,
+          results,
+        });
+      } catch (err) {
+        if (err instanceof GatewayNotConfiguredError) {
+          res.status(500).json({ error: err.message });
+          return;
+        }
+        console.error('Send CV via WhatsApp error:', err);
+        res.status(500).json({ error: 'Failed to dispatch CV via central WhatsApp gateway' });
       }
     }
   );

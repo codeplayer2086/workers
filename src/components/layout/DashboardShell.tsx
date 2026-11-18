@@ -6,7 +6,9 @@ import {
   LayoutDashboard,
   LogOut,
   Menu,
+  MessageCircle,
   UserCheck,
+  UserCircle,
   UserPlus,
   Users,
   X,
@@ -46,16 +48,20 @@ export function DashboardShell({
           { label: 'Staff Accounts', to: '/admin/employees', icon: Users },
           { label: 'Worker Directory', to: '/employee/workers', icon: ClipboardList },
           { label: 'Activity Logs', to: '/admin/logs', icon: ClipboardList },
+          { label: 'My Profile', to: '/profile', icon: UserCircle },
         ]
       : user.role === 'EMPLOYEE'
         ? [
             { label: 'Overview', to: '/employee', icon: LayoutDashboard },
             { label: 'Worker Directory', to: '/employee/workers', icon: Users },
             { label: 'Register Worker', to: '/employee/workers/new', icon: UserPlus },
+            { label: 'My Profile', to: '/profile', icon: UserCircle },
           ]
         : [
             { label: 'Overview', to: '/agent', icon: LayoutDashboard },
             { label: 'Candidate Catalog', to: '/agent/candidates', icon: Users },
+            { label: 'My Customers', to: '/agent/customers', icon: MessageCircle },
+            { label: 'My Profile', to: '/profile', icon: UserCircle },
           ];
 
   const handleLogout = async () => {
@@ -119,10 +125,14 @@ export function DashboardShell({
       </div>
 
       <div className="border-t border-slate-800 p-4">
-        <div className="mb-3">
+        <Link
+          to="/profile"
+          onClick={() => setMobileMenuOpen(false)}
+          className="mb-3 block rounded-lg p-1.5 transition-colors hover:bg-slate-800"
+        >
           <p className="truncate text-sm font-medium text-white">{user.fullName}</p>
           <p className="truncate text-xs text-slate-400">{roleLabel}</p>
-        </div>
+        </Link>
         <button
           type="button"
           onClick={handleLogout}

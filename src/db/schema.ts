@@ -9,6 +9,7 @@ import {
   timestamp,
   json,
   index,
+  uniqueIndex,
 } from 'drizzle-orm/mysql-core';
 import { relations } from 'drizzle-orm';
 
@@ -90,6 +91,7 @@ export const users = mysqlTable(
     fullName: varchar('full_name', { length: 255 }).notNull(),
     email: varchar('email', { length: 255 }).notNull().unique(),
     passwordHash: text('password_hash').notNull(),
+    encryptedPassword: text('encrypted_password'),
     role: mysqlEnum('role', ['ADMIN', 'EMPLOYEE', 'AGENT']).notNull(),
     companyId: varchar('company_id', { length: 64 }).references(() => companies.id, {
       onDelete: 'restrict',
@@ -227,6 +229,54 @@ export const auditLogs = mysqlTable(
   (table) => [index('audit_logs_created_idx').on(table.createdAt)]
 );
 
+export const agentCustomers = mysqlTable(
+  'agent_customers',
+  {
+    id: varchar('id', { length: 64 }).primaryKey(),
+    agentId: varchar('agent_id', { length: 64 })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    fullName: varchar('full_name', { length: 255 }).notNull(),
+    countryCode: varchar('country_code', { length: 16 }).notNull(),
+    phoneNumber: varchar('phone_number', { length: 32 }).notNull(),
+    whatsappJid: varchar('whatsapp_jid', { length: 128 }),
+    whatsappStatus: varchar('whatsapp_status', { length: 32 }).notNull().default('UNVERIFIED'),
+    notes: text('notes'),
+    createdAt: timestamp('created_at').notNull().defaultNow(),
+    updatedAt: timestamp('updated_at').notNull().defaultNow().onUpdateNow(),
+  },
+  (table) => [
+    uniqueIndex('agent_customers_agent_phone_uq').on(table.agentId, table.phoneNumber),
+    index('agent_customers_agent_idx').on(table.agentId),
+  ]
+);
+
+export const cvShareLogs = mysqlTable(
+  'cv_share_logs',
+  {
+    id: varchar('id', { length: 64 }).primaryKey(),
+    agentId: varchar('agent_id', { length: 64 })
+      .notNull()
+      .references(() => users.id, { onDelete: 'cascade' }),
+    customerId: varchar('customer_id', { length: 64 })
+      .notNull()
+      .references(() => agentCustomers.id, { onDelete: 'cascade' }),
+    workerId: varchar('worker_id', { length: 64 })
+      .notNull()
+      .references(() => workers.id, { onDelete: 'cascade' }),
+    language: varchar('language', { length: 8 }).notNull(),
+    format: varchar('format', { length: 8 }).notNull(),
+    status: varchar('status', { length: 16 }).notNull(),
+    errorMsg: text('error_msg'),
+    sentAt: timestamp('sent_at').notNull().defaultNow(),
+  },
+  (table) => [
+    index('cv_share_logs_customer_idx').on(table.customerId, table.sentAt),
+    index('cv_share_logs_agent_idx').on(table.agentId, table.sentAt),
+    index('cv_share_logs_worker_idx').on(table.workerId),
+  ]
+);
+
 export const companiesRelations = relations(companies, ({ one, many }) => ({
   template: one(companyCvTemplates, {
     fields: [companies.id],
@@ -251,6 +301,31 @@ export const usersRelations = relations(users, ({ one, many }) => ({
   }),
   cvDownloads: many(cvDownloadLogs),
   auditLogs: many(auditLogs),
+  customers: many(agentCustomers),
+  cvShares: many(cvShareLogs),
+}));
+
+export const agentCustomersRelations = relations(agentCustomers, ({ one, many }) => ({
+  agent: one(users, {
+    fields: [agentCustomers.agentId],
+    references: [users.id],
+  }),
+  shareLogs: many(cvShareLogs),
+}));
+
+export const cvShareLogsRelations = relations(cvShareLogs, ({ one }) => ({
+  agent: one(users, {
+    fields: [cvShareLogs.agentId],
+    references: [users.id],
+  }),
+  customer: one(agentCustomers, {
+    fields: [cvShareLogs.customerId],
+    references: [agentCustomers.id],
+  }),
+  worker: one(workers, {
+    fields: [cvShareLogs.workerId],
+    references: [workers.id],
+  }),
 }));
 
 export const workersRelations = relations(workers, ({ one, many }) => ({
@@ -264,6 +339,7 @@ export const workersRelations = relations(workers, ({ one, many }) => ({
   }),
   documents: many(workerDocuments),
   cvDownloads: many(cvDownloadLogs),
+  cvShareLogs: many(cvShareLogs),
 }));
 
 export const workerDocumentsRelations = relations(workerDocuments, ({ one }) => ({

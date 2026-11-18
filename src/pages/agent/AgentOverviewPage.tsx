@@ -8,6 +8,9 @@ import { OCCUPATIONS } from '../../lib/cv-dictionary';
 interface AgentOverviewData {
   publishedCount: number;
   byOccupation: Record<string, number>;
+  customerCount?: number;
+  verifiedCustomerCount?: number;
+  whatsappSentCount?: number;
   recentDownloads: Array<{
     id: string;
     language: 'EN' | 'AR';
@@ -55,7 +58,7 @@ export function AgentOverviewPage() {
       {data && (
         <div className="space-y-8">
           {/* Summary KPI Row */}
-          <section className="grid grid-cols-1 gap-4 sm:grid-cols-3">
+          <section className="grid grid-cols-1 gap-4 sm:grid-cols-2 lg:grid-cols-4">
             <div className="rounded-xl border border-slate-200 bg-white p-5">
               <p className="text-xs font-medium text-slate-500">Available Published Candidates</p>
               <p className="mt-2 font-mono-tabular text-3xl font-bold text-slate-900">
@@ -72,12 +75,26 @@ export function AgentOverviewPage() {
               <p className="mt-1 text-xs text-slate-500">Branded with {company?.nameEn}</p>
             </div>
 
-            <div className="rounded-xl border border-slate-200 bg-white p-5">
-              <p className="text-xs font-medium text-slate-500">Supported CV Formats</p>
-              <p className="mt-2 font-mono-tabular text-2xl font-bold text-slate-900">
-                EN · AR / PDF · PNG
+            <Link
+              to="/agent/customers"
+              className="rounded-xl border border-slate-200 bg-white p-5 transition-colors hover:border-sky-400"
+            >
+              <p className="text-xs font-medium text-slate-500">WhatsApp Verified Householders</p>
+              <p className="mt-2 font-mono-tabular text-3xl font-bold text-emerald-700">
+                {data.verifiedCustomerCount ?? 0}
+                <span className="ml-1.5 text-sm font-medium text-slate-400">
+                  / {data.customerCount ?? 0}
+                </span>
               </p>
-              <p className="mt-1 text-xs text-slate-500">Separate single-language A4 layouts</p>
+              <p className="mt-1 text-xs text-sky-700 hover:underline">Open private directory</p>
+            </Link>
+
+            <div className="rounded-xl border border-slate-200 bg-white p-5">
+              <p className="text-xs font-medium text-slate-500">CVs Sent via WhatsApp</p>
+              <p className="mt-2 font-mono-tabular text-3xl font-bold text-slate-900">
+                {data.whatsappSentCount ?? 0}
+              </p>
+              <p className="mt-1 text-xs text-slate-500">Dispatched via central sender</p>
             </div>
           </section>
 

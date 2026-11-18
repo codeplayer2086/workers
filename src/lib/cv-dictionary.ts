@@ -422,3 +422,146 @@ export function transliterateTextToArabicFallback(input: string): string {
     })
     .join(' ');
 }
+
+const COMPANY_ARABIC_TERMS: Record<string, string> = {
+  company: 'شركة',
+  co: 'شركة',
+  corp: 'شركة',
+  corporation: 'مؤسسة',
+  est: 'مؤسسة',
+  establishment: 'مؤسسة',
+  group: 'مجموعة',
+  holding: 'القابضة',
+  agency: 'مكتب',
+  office: 'مكتب',
+  bureau: 'مكتب',
+  center: 'مركز',
+  centre: 'مركز',
+  international: 'الدولية',
+  intl: 'الدولية',
+  global: 'العالمية',
+  world: 'العالم',
+  worldwide: 'العالمية',
+  manpower: 'للقوى العاملة',
+  recruitment: 'للاستقدام',
+  recruiting: 'للاستقدام',
+  placement: 'للتوظيف',
+  staffing: 'للتوظيف',
+  employment: 'للتوظيف',
+  labor: 'للعمالة',
+  labour: 'للعمالة',
+  domestic: 'للعمالة المنزلية',
+  hr: 'للموارد البشرية',
+  resources: 'للموارد',
+  human: 'البشرية',
+  services: 'للخدمات',
+  service: 'للخدمات',
+  solutions: 'للحلول',
+  partners: 'للشركاء',
+  gulf: 'الخليج',
+  khaleej: 'الخليج',
+  arabia: 'العربية',
+  arabian: 'العربية',
+  arab: 'العربية',
+  saudi: 'السعودية',
+  kingdom: 'المملكة',
+  modern: 'الحديثة',
+  united: 'المتحدة',
+  first: 'الأولى',
+  prime: 'الأولى',
+  elite: 'النخبة',
+  royal: 'الملكية',
+  golden: 'الذهبية',
+  gold: 'الذهبية',
+  star: 'النجم',
+  bright: 'المشرق',
+  trust: 'الثقة',
+  aman: 'الأمان',
+  amaan: 'الأمان',
+  watan: 'الوطن',
+  jazira: 'الجزيرة',
+  jazeera: 'الجزيرة',
+  noor: 'النور',
+  nour: 'النور',
+  salam: 'السلام',
+  salaam: 'السلام',
+  falah: 'الفلاح',
+  fajr: 'الفجر',
+  amal: 'الأمل',
+  majd: 'المجد',
+  najd: 'نجد',
+  riyadh: 'الرياض',
+  jeddah: 'جدة',
+  dammam: 'الدمام',
+  khobar: 'الخبر',
+  makkah: 'مكة',
+  madinah: 'المدينة',
+  qatar: 'قطر',
+  kuwait: 'الكويت',
+  oman: 'عُمان',
+  bahrain: 'البحرين',
+  dubai: 'دبي',
+  abudhabi: 'أبوظبي',
+  emirates: 'الإمارات',
+  llc: 'ذ.م.م',
+  ltd: 'المحدودة',
+  limited: 'المحدودة',
+  and: 'و',
+};
+
+export function transliterateCompanyNameToArabicFallback(nameEn: string): string {
+  const cleaned = nameEn.trim();
+  if (!cleaned) return '';
+
+  // Split spaces while keeping hyphenated Al- prefixes intelligent
+  const rawTokens = cleaned.split(/\s+/);
+  const hasLeadingPrefixWord = rawTokens.some((tok) => {
+    const key = tok.toLowerCase().replace(/[^a-z]/g, '');
+    return ['company', 'co', 'corp', 'corporation', 'est', 'establishment', 'group', 'agency', 'office', 'bureau', 'center', 'centre'].includes(key);
+  });
+
+  const translatedTokens = rawTokens
+    .map((token) => {
+      const stripped = token.replace(/[.,&()]+$/g, '').replace(/^[.,&()]+/g, '');
+      if (!stripped) return '';
+
+      const lowerRaw = stripped.toLowerCase();
+      if (lowerRaw.startsWith('al-') || lowerRaw.startsWith('el-')) {
+        const root = lowerRaw.slice(3).replace(/[^a-z]/g, '');
+        if (!root) return '';
+        const arabicRoot = COMPANY_ARABIC_TERMS[root] || transliterateTextToArabicFallback(root);
+        return arabicRoot.startsWith('ال') ? arabicRoot : `ال${arabicRoot}`;
+      }
+
+      const key = lowerRaw.replace(/[^a-z]/g, '');
+      if (!key) return stripped;
+      if (key === 'al' || key === 'el') return 'ال';
+      if (COMPANY_ARABIC_TERMS[key]) return COMPANY_ARABIC_TERMS[key];
+      return transliterateTextToArabicFallback(key);
+    })
+    .filter(Boolean);
+
+  // Merge standalone "ال" into the next Arabic token cleanly
+  const merged: string[] = [];
+  for (let i = 0; i < translatedTokens.length; i++) {
+    if (translatedTokens[i] === 'ال' && i + 1 < translatedTokens.length) {
+      const next = translatedTokens[i + 1];
+      merged.push(next.startsWith('ال') ? next : `ال${next}`);
+      i += 1;
+    } else {
+      merged.push(translatedTokens[i]);
+    }
+  }
+
+  // Move trailing "شركة" / "مكتب" to the front for natural Arabic phrasing if it appeared at the end
+  if (hasLeadingPrefixWord && merged.length > 1) {
+    const last = merged[merged.length - 1];
+    if (['شركة', 'مكتب', 'مؤسسة', 'مجموعة'].includes(last)) {
+      merged.pop();
+      merged.unshift(last);
+    }
+  }
+
+  return merged.join(' ').trim();
+}
+

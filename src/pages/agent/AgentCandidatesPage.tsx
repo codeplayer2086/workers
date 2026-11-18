@@ -1,10 +1,11 @@
 import React, { useEffect, useState } from 'react';
 import { Link, useSearchParams } from 'react-router-dom';
-import { Search, SlidersHorizontal } from 'lucide-react';
+import { MessageCircle, Search, SlidersHorizontal } from 'lucide-react';
 import { DashboardShell } from '../../components/layout/DashboardShell';
+import { SendCvWhatsAppModal } from '../../components/cv/SendCvWhatsAppModal';
 import { apiFetch } from '../../lib/api';
 import { OCCUPATIONS, SKILL_LABELS } from '../../lib/cv-dictionary';
-import type { WorkerSummary } from '../../types/portal';
+import type { WorkerDetail, WorkerSummary } from '../../types/portal';
 
 export function AgentCandidatesPage() {
   const [searchParams] = useSearchParams();
@@ -21,6 +22,22 @@ export function AgentCandidatesPage() {
   const [minExp, setMinExp] = useState('');
   const [arabicLevel, setArabicLevel] = useState('');
   const [skill, setSkill] = useState('');
+  const [whatsAppWorker, setWhatsAppWorker] = useState<WorkerDetail | null>(null);
+  const [loadingWhatsAppId, setLoadingWhatsAppId] = useState<string | null>(null);
+  const [whatsAppError, setWhatsAppError] = useState<string | null>(null);
+
+  const openWhatsAppForCandidate = async (candidateId: string) => {
+    setLoadingWhatsAppId(candidateId);
+    setWhatsAppError(null);
+    try {
+      const res = await apiFetch<{ candidate: WorkerDetail }>(`/api/candidates/${candidateId}`);
+      setWhatsAppWorker(res.candidate);
+    } catch (err) {
+      setWhatsAppError(err instanceof Error ? err.message : 'Failed to load candidate for WhatsApp');
+    } finally {
+      setLoadingWhatsAppId(null);
+    }
+  };
 
   const loadCandidates = async () => {
     setLoading(true);
@@ -218,6 +235,12 @@ export function AgentCandidatesPage() {
           </div>
         </form>
 
+        {whatsAppError && (
+          <div role="alert" className="rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-xs font-medium text-red-800">
+            {whatsAppError}
+          </div>
+        )}
+
         {/* Candidate Cards Grid */}
         {loading ? (
           <div className="grid grid-cols-1 gap-5 md:grid-cols-2 lg:grid-cols-3">
@@ -286,8 +309,17 @@ export function AgentCandidatesPage() {
                   </div>
                 </div>
 
-                <div className="flex items-center justify-between border-t border-slate-100 bg-slate-50 px-5 py-3">
-                  <span className="text-xs text-slate-500">EN & AR CV Ready</span>
+                <div className="flex items-center justify-between gap-2 border-t border-slate-100 bg-slate-50 px-5 py-3">
+                  <button
+                    type="button"
+                    disabled={loadingWhatsAppId === c.id}
+                    onClick={() => openWhatsAppForCandidate(c.id)}
+                    aria-label={`Send ${c.fullNameEn} CV via WhatsApp`}
+                    className="inline-flex items-center gap-1.5 rounded-lg border border-emerald-600 bg-white px-3 py-1.5 text-xs font-semibold text-emerald-700 hover:bg-emerald-50 disabled:opacity-50 whitespace-nowrap"
+                  >
+                    <MessageCircle className="h-3.5 w-3.5" />
+                    <span>{loadingWhatsAppId === c.id ? 'Loading...' : 'WhatsApp'}</span>
+                  </button>
                   <Link
                     to={`/agent/candidates/${c.id}`}
                     className="rounded-lg bg-slate-900 px-3.5 py-1.5 text-xs font-semibold text-white hover:bg-slate-800 whitespace-nowrap"
@@ -300,6 +332,12 @@ export function AgentCandidatesPage() {
           </div>
         )}
       </div>
+
+      <SendCvWhatsAppModal
+        isOpen={whatsAppWorker !== null}
+        onClose={() => setWhatsAppWorker(null)}
+        worker={whatsAppWorker}
+      />
     </DashboardShell>
   );
 }

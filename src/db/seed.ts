@@ -1,15 +1,18 @@
 import { count } from 'drizzle-orm';
 import { db } from './index.ts';
 import {
+  agentCustomers,
   auditLogs,
   companies,
   companyCvTemplates,
   cvDownloadLogs,
+  cvShareLogs,
   users,
   workerDocuments,
   workers,
 } from './schema.ts';
 import { hashPassword } from '../lib/server-auth.ts';
+import { encryptPasswordForAdmin } from '../lib/password-vault.ts';
 import { ensureSeedAssetsInPrivateStorage } from '../lib/image-storage.ts';
 import { ensureMySqlTablesExist } from './bootstrap.ts';
 
@@ -116,6 +119,7 @@ async function runSeed(): Promise<void> {
       fullName: 'Tariqul Islam',
       email: 'admin@dhakarecruit.com',
       passwordHash: hashPassword('Admin@1234'),
+      encryptedPassword: encryptPasswordForAdmin('Admin@1234'),
       role: 'ADMIN',
       companyId: null,
       isActive: true,
@@ -125,6 +129,7 @@ async function runSeed(): Promise<void> {
       fullName: 'Farhana Rahman',
       email: 'employee@dhakarecruit.com',
       passwordHash: hashPassword('Staff@1234'),
+      encryptedPassword: encryptPasswordForAdmin('Staff@1234'),
       role: 'EMPLOYEE',
       companyId: null,
       isActive: true,
@@ -134,6 +139,7 @@ async function runSeed(): Promise<void> {
       fullName: 'Mahmudul Hasan',
       email: 'mahmud@dhakarecruit.com',
       passwordHash: hashPassword('Staff@1234'),
+      encryptedPassword: encryptPasswordForAdmin('Staff@1234'),
       role: 'EMPLOYEE',
       companyId: null,
       isActive: true,
@@ -143,6 +149,7 @@ async function runSeed(): Promise<void> {
       fullName: 'Fahad Al-Qahtani',
       email: 'agent.riyadh@aljazira.sa',
       passwordHash: hashPassword('Agent@1234'),
+      encryptedPassword: encryptPasswordForAdmin('Agent@1234'),
       role: 'AGENT',
       companyId: 'comp_aljazira',
       isActive: true,
@@ -152,6 +159,7 @@ async function runSeed(): Promise<void> {
       fullName: 'Omar Al-Ghamdi',
       email: 'agent.jeddah@alnoor.sa',
       passwordHash: hashPassword('Agent@1234'),
+      encryptedPassword: encryptPasswordForAdmin('Agent@1234'),
       role: 'AGENT',
       companyId: 'comp_alnoor',
       isActive: true,
@@ -490,4 +498,53 @@ async function runSeed(): Promise<void> {
       metadata: { workerCode: 'WKR-2026-0005', contractedCompanyId: 'comp_aljazira' },
     },
   ]);
+
+  // 6. Seed Private Per-Agent Householder Directory & Sample Share Log
+  await db.insert(agentCustomers).values([
+    {
+      id: 'cust_seed_1',
+      agentId: 'usr_agent_1',
+      fullName: 'Abdullah Al-Mansoor',
+      countryCode: '+966',
+      phoneNumber: '966501234567',
+      whatsappJid: '966501234567@s.whatsapp.net',
+      whatsappStatus: 'VERIFIED',
+      notes: 'Looking for experienced housemaid for Riyadh villa family of 4.',
+    },
+    {
+      id: 'cust_seed_2',
+      agentId: 'usr_agent_1',
+      fullName: 'Noura Al-Harbi',
+      countryCode: '+966',
+      phoneNumber: '966558887766',
+      whatsappJid: '966558887766@s.whatsapp.net',
+      whatsappStatus: 'VERIFIED',
+      notes: 'Needs bilingual nanny / baby care specialist.',
+    },
+    {
+      id: 'cust_seed_3',
+      agentId: 'usr_agent_2',
+      fullName: 'Khalid Al-Zahrani',
+      countryCode: '+966',
+      phoneNumber: '966543210987',
+      whatsappJid: null,
+      whatsappStatus: 'NOT_REGISTERED',
+      notes: 'Jeddah family inquiry — secondary mobile number.',
+    },
+  ]);
+
+  await db.insert(cvShareLogs).values([
+    {
+      id: 'shlog_seed_1',
+      agentId: 'usr_agent_1',
+      customerId: 'cust_seed_1',
+      workerId: 'wkr_0001',
+      language: 'AR',
+      format: 'PDF',
+      status: 'SENT',
+      errorMsg: null,
+      sentAt: new Date(Date.now() - 1000 * 60 * 60 * 3),
+    },
+  ]);
 }
+

@@ -31,7 +31,7 @@ export const visibleFieldsSchema = z.object({
 
 export const companyCreateSchema = z.object({
   nameEn: z.string().trim().min(2, 'English company name is required'),
-  nameAr: z.string().trim().min(2, 'Arabic company name is required'),
+  nameAr: z.string().trim().optional().default(''),
   country: z.string().trim().min(2).default('Saudi Arabia'),
   licenseNumber: z.string().trim().optional().nullable(),
   address: z.string().trim().optional().nullable(),
@@ -64,6 +64,31 @@ export const createEmployeeSchema = z.object({
   fullName: z.string().trim().min(2, 'Employee name is required'),
   email: z.string().trim().email('Valid email address is required'),
   password: z.string().min(6, 'Password must be at least 6 characters'),
+});
+
+export const adminUpdateUserSchema = z.object({
+  fullName: z.string().trim().min(2, 'Full name is required'),
+  email: z.string().trim().email('Valid email address is required'),
+  password: z
+    .string()
+    .optional()
+    .transform((v) => (typeof v === 'string' && v.trim().length === 0 ? undefined : v))
+    .refine((v) => v === undefined || v.length >= 6, {
+      message: 'Password must be at least 6 characters',
+    }),
+  companyId: z.string().trim().optional().nullable(),
+});
+
+export const selfProfileUpdateSchema = z.object({
+  fullName: z.string().trim().min(2, 'Full name is required'),
+  email: z.string().trim().email('Valid email address is required'),
+  password: z
+    .string()
+    .optional()
+    .transform((v) => (typeof v === 'string' && v.trim().length === 0 ? undefined : v))
+    .refine((v) => v === undefined || v.length >= 6, {
+      message: 'Password must be at least 6 characters',
+    }),
 });
 
 export const workerInputSchema = z.object({
@@ -122,6 +147,27 @@ export const cvLogSchema = z.object({
   format: z.enum(['PDF', 'PNG']),
   companyId: z.string().trim().optional(),
 });
+
+export const createAgentCustomerSchema = z.object({
+  fullName: z.string().trim().min(2, 'Householder full name is required').max(200),
+  countryCode: z.string().trim().min(1, 'Country code is required').max(12),
+  phoneNumber: z.string().trim().min(6, 'Phone number is required').max(32),
+  notes: z.string().trim().max(1000).optional().nullable(),
+});
+
+export const sendCvWhatsAppSchema = z.object({
+  workerId: z.string().trim().min(1, 'Candidate selection is required'),
+  customerIds: z
+    .array(z.string().trim().min(1))
+    .min(1, 'Select at least one verified householder recipient')
+    .max(25, 'You can send to at most 25 recipients per batch'),
+  language: z.enum(['EN', 'AR']),
+  format: z.enum(['PDF', 'PNG']),
+  caption: z.string().trim().max(1000).optional().nullable(),
+  fileBase64: z.string().min(20, 'Generated CV file data is required'),
+  fileName: z.string().trim().min(3, 'CV filename is required').max(180),
+});
+
 
 export type UserRole = z.infer<typeof userRoleSchema>;
 export type WorkerStatus = z.infer<typeof workerStatusSchema>;

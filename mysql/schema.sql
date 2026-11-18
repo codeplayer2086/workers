@@ -40,6 +40,7 @@ CREATE TABLE IF NOT EXISTS users (
   full_name VARCHAR(255) NOT NULL,
   email VARCHAR(255) NOT NULL UNIQUE,
   password_hash TEXT NOT NULL,
+  encrypted_password TEXT NULL,
   role ENUM('ADMIN', 'EMPLOYEE', 'AGENT') NOT NULL,
   company_id VARCHAR(64) NULL,
   is_active BOOLEAN NOT NULL DEFAULT TRUE,
@@ -138,3 +139,38 @@ CREATE TABLE IF NOT EXISTS audit_logs (
   INDEX audit_logs_created_idx (created_at),
   CONSTRAINT fk_audit_actor FOREIGN KEY (actor_id) REFERENCES users(id)
 ) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS agent_customers (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  agent_id VARCHAR(64) NOT NULL,
+  full_name VARCHAR(255) NOT NULL,
+  country_code VARCHAR(16) NOT NULL,
+  phone_number VARCHAR(32) NOT NULL,
+  whatsapp_jid VARCHAR(128) NULL,
+  whatsapp_status VARCHAR(32) NOT NULL DEFAULT 'UNVERIFIED',
+  notes TEXT NULL,
+  created_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  updated_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP ON UPDATE CURRENT_TIMESTAMP,
+  UNIQUE KEY agent_customers_agent_phone_uq (agent_id, phone_number),
+  INDEX agent_customers_agent_idx (agent_id),
+  CONSTRAINT fk_customer_agent FOREIGN KEY (agent_id) REFERENCES users(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
+CREATE TABLE IF NOT EXISTS cv_share_logs (
+  id VARCHAR(64) NOT NULL PRIMARY KEY,
+  agent_id VARCHAR(64) NOT NULL,
+  customer_id VARCHAR(64) NOT NULL,
+  worker_id VARCHAR(64) NOT NULL,
+  language VARCHAR(8) NOT NULL,
+  format VARCHAR(8) NOT NULL,
+  status VARCHAR(16) NOT NULL,
+  error_msg TEXT NULL,
+  sent_at TIMESTAMP NOT NULL DEFAULT CURRENT_TIMESTAMP,
+  INDEX cv_share_logs_customer_idx (customer_id, sent_at),
+  INDEX cv_share_logs_agent_idx (agent_id, sent_at),
+  INDEX cv_share_logs_worker_idx (worker_id),
+  CONSTRAINT fk_sharelog_agent FOREIGN KEY (agent_id) REFERENCES users(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sharelog_customer FOREIGN KEY (customer_id) REFERENCES agent_customers(id) ON DELETE CASCADE,
+  CONSTRAINT fk_sharelog_worker FOREIGN KEY (worker_id) REFERENCES workers(id) ON DELETE CASCADE
+) ENGINE=InnoDB DEFAULT CHARSET=utf8mb4 COLLATE=utf8mb4_unicode_ci;
+
