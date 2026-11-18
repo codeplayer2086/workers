@@ -1,0 +1,6 @@
+{
+  "name": "Maktab Placement — International Worker Recruitment Portal",
+  "description": "Centralized Bangladesh-to-GCC worker recruitment registry, compliance vault, and dual-language English/Arabic A4 CV studio.",
+  "requestFramePermissions": [],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
