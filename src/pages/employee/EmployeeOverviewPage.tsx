@@ -1,6 +1,7 @@
 import React, { useEffect, useState } from 'react';
 import { Link } from 'react-router-dom';
 import { DashboardShell } from '../../components/layout/DashboardShell';
+import { PrivateImage } from '../../components/common/PrivateImage';
 import { apiFetch } from '../../lib/api';
 import { OCCUPATIONS } from '../../lib/cv-dictionary';
 
@@ -25,11 +26,13 @@ interface EmployeeOverviewData {
 
 export function EmployeeOverviewPage() {
   const [data, setData] = useState<EmployeeOverviewData | null>(null);
+  const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
     apiFetch<EmployeeOverviewData>('/api/employee/overview')
       .then(setData)
+      .catch((err) => setError(err instanceof Error ? err.message : 'Failed to load worker summary'))
       .finally(() => setLoading(false));
   }, []);
 
@@ -46,6 +49,15 @@ export function EmployeeOverviewPage() {
         </Link>
       }
     >
+      {error && (
+        <div
+          role="alert"
+          className="mb-6 rounded-xl border border-red-200 bg-red-50 px-4 py-3 text-sm text-red-800"
+        >
+          {error}
+        </div>
+      )}
+
       {loading && (
         <div className="grid grid-cols-2 gap-4 lg:grid-cols-4">
           {[1, 2, 3, 4].map((i) => (
@@ -104,7 +116,7 @@ export function EmployeeOverviewPage() {
                   <div className="flex items-center gap-3">
                     <div className="h-10 w-10 overflow-hidden rounded-lg border border-slate-200 bg-slate-100">
                       {w.facePhotoPath && (
-                        <img
+                        <PrivateImage
                           src={w.facePhotoPath}
                           alt={w.fullNameEn}
                           referrerPolicy="no-referrer"

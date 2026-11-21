@@ -7,27 +7,14 @@ import { adminAuth } from './firebase-admin.ts';
 import firebaseConfig from '../../firebase-applet-config.json' with { type: 'json' };
 import type { UserRole } from './validation.ts';
 import { getCookieSecurityOptions } from './runtime-config.ts';
+import { hashPassword, verifyPassword } from './password-auth.ts';
+
+export { hashPassword, verifyPassword };
 
 const SESSION_COOKIE_NAME = 'maktab_session';
 const TOKEN_SECRET =
   process.env.SESSION_SECRET ||
   `${firebaseConfig.projectId}:${firebaseConfig.apiKey}:maktab-placement-session`;
-
-export function hashPassword(password: string): string {
-  const salt = crypto.randomBytes(16).toString('hex');
-  const derived = crypto.scryptSync(password, salt, 64).toString('hex');
-  return `${salt}:${derived}`;
-}
-
-export function verifyPassword(password: string, storedHash: string): boolean {
-  const parts = storedHash.split(':');
-  if (parts.length !== 2) return false;
-  const [salt, keyHex] = parts;
-  const keyBuf = Buffer.from(keyHex, 'hex');
-  const derivedBuf = crypto.scryptSync(password, salt, 64);
-  if (keyBuf.length !== derivedBuf.length) return false;
-  return crypto.timingSafeEqual(keyBuf, derivedBuf);
-}
 
 interface SessionPayload {
   userId: string;

@@ -1,6 +1,8 @@
 import React, { useEffect, useState } from 'react';
 import {
+  Check,
   CheckCircle2,
+  Copy,
   Eye,
   EyeOff,
   KeyRound,
@@ -28,6 +30,8 @@ export function AdminEmployeesPage() {
   const [fullName, setFullName] = useState('');
   const [email, setEmail] = useState('');
   const [password, setPassword] = useState('');
+  const [showCreatePassword, setShowCreatePassword] = useState(false);
+  const [copiedId, setCopiedId] = useState<string | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [feedback, setFeedback] = useState<string | null>(null);
 
@@ -42,6 +46,16 @@ export function AdminEmployeesPage() {
   const [profileTarget, setProfileTarget] = useState<AdminEmployeeRow | null>(null);
   const [deleteConfirmTarget, setDeleteConfirmTarget] = useState<AdminEmployeeRow | null>(null);
   const [deleting, setDeleting] = useState(false);
+
+  const handleCopyPassword = async (id: string, visiblePwd: string) => {
+    try {
+      await navigator.clipboard.writeText(visiblePwd);
+      setCopiedId(id);
+      setTimeout(() => setCopiedId((curr) => (curr === id ? null : curr)), 1800);
+    } catch {
+      // Ignore clipboard failure
+    }
+  };
 
   useEffect(() => {
     apiFetch<AdminEmployeeRow[]>('/api/admin/employees')
@@ -143,6 +157,8 @@ export function AdminEmployeesPage() {
             <input
               type="text"
               required
+              autoComplete="off"
+              aria-label="Staff Full Name"
               value={fullName}
               onChange={(e) => setFullName(e.target.value)}
               placeholder="Staff Full Name"
@@ -151,20 +167,34 @@ export function AdminEmployeesPage() {
             <input
               type="email"
               required
+              autoComplete="off"
+              aria-label="Staff Email Address"
               value={email}
               onChange={(e) => setEmail(e.target.value)}
               placeholder="staff@dhakarecruit.com"
               className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
             />
-            <input
-              type="password"
-              required
-              minLength={6}
-              value={password}
-              onChange={(e) => setPassword(e.target.value)}
-              placeholder="Password (min 6 chars)"
-              className="rounded-lg border border-slate-300 px-3 py-2 text-sm"
-            />
+            <div className="relative">
+              <input
+                type={showCreatePassword ? 'text' : 'password'}
+                required
+                minLength={6}
+                autoComplete="new-password"
+                aria-label="Staff Password"
+                value={password}
+                onChange={(e) => setPassword(e.target.value)}
+                placeholder="Password (min 6 chars)"
+                className="w-full rounded-lg border border-slate-300 py-2 pl-3 pr-9 text-sm"
+              />
+              <button
+                type="button"
+                onClick={() => setShowCreatePassword((v) => !v)}
+                aria-label={showCreatePassword ? 'Hide new employee password' : 'Show new employee password'}
+                className="absolute right-2.5 top-1/2 -translate-y-1/2 text-slate-400 hover:text-slate-700"
+              >
+                {showCreatePassword ? <EyeOff className="h-4 w-4" /> : <Eye className="h-4 w-4" />}
+              </button>
+            </div>
             <button
               type="submit"
               className="inline-flex items-center justify-center gap-2 rounded-lg bg-slate-900 px-4 py-2 text-xs font-semibold text-white hover:bg-slate-800"
@@ -264,20 +294,34 @@ export function AdminEmployeesPage() {
                               : 'Not synced'}
                           </span>
                           {emp.visiblePassword && (
-                            <button
-                              type="button"
-                              onClick={() =>
-                                setRevealedIds((prev) => ({ ...prev, [emp.id]: !isRevealed }))
-                              }
-                              aria-label={isRevealed ? 'Hide password' : 'Show password'}
-                              className="text-slate-500 hover:text-slate-900"
-                            >
-                              {isRevealed ? (
-                                <EyeOff className="h-3.5 w-3.5" />
-                              ) : (
-                                <Eye className="h-3.5 w-3.5" />
-                              )}
-                            </button>
+                            <div className="flex items-center gap-1.5">
+                              <button
+                                type="button"
+                                onClick={() =>
+                                  setRevealedIds((prev) => ({ ...prev, [emp.id]: !isRevealed }))
+                                }
+                                aria-label={isRevealed ? 'Hide password' : 'Show password'}
+                                className="text-slate-500 hover:text-slate-900"
+                              >
+                                {isRevealed ? (
+                                  <EyeOff className="h-3.5 w-3.5" />
+                                ) : (
+                                  <Eye className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                              <button
+                                type="button"
+                                onClick={() => handleCopyPassword(emp.id, emp.visiblePassword!)}
+                                aria-label={`Copy password for ${emp.fullName}`}
+                                className="text-slate-500 hover:text-slate-900"
+                              >
+                                {copiedId === emp.id ? (
+                                  <Check className="h-3.5 w-3.5 text-emerald-600" />
+                                ) : (
+                                  <Copy className="h-3.5 w-3.5" />
+                                )}
+                              </button>
+                            </div>
                           )}
                         </div>
                       </div>
@@ -346,20 +390,34 @@ export function AdminEmployeesPage() {
                                 : '—'}
                             </span>
                             {emp.visiblePassword && (
-                              <button
-                                type="button"
-                                onClick={() =>
-                                  setRevealedIds((prev) => ({ ...prev, [emp.id]: !isRevealed }))
-                                }
-                                aria-label={isRevealed ? 'Hide password' : 'Show password'}
-                                className="text-slate-500 hover:text-slate-900"
-                              >
-                                {isRevealed ? (
-                                  <EyeOff className="h-3.5 w-3.5" />
-                                ) : (
-                                  <Eye className="h-3.5 w-3.5" />
-                                )}
-                              </button>
+                              <>
+                                <button
+                                  type="button"
+                                  onClick={() =>
+                                    setRevealedIds((prev) => ({ ...prev, [emp.id]: !isRevealed }))
+                                  }
+                                  aria-label={isRevealed ? 'Hide password' : 'Show password'}
+                                  className="text-slate-500 hover:text-slate-900"
+                                >
+                                  {isRevealed ? (
+                                    <EyeOff className="h-3.5 w-3.5" />
+                                  ) : (
+                                    <Eye className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                                <button
+                                  type="button"
+                                  onClick={() => handleCopyPassword(emp.id, emp.visiblePassword!)}
+                                  aria-label={`Copy password for ${emp.fullName}`}
+                                  className="text-slate-500 hover:text-slate-900"
+                                >
+                                  {copiedId === emp.id ? (
+                                    <Check className="h-3.5 w-3.5 text-emerald-600" />
+                                  ) : (
+                                    <Copy className="h-3.5 w-3.5" />
+                                  )}
+                                </button>
+                              </>
                             )}
                           </div>
                         </td>

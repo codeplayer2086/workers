@@ -84,7 +84,7 @@ export function AdminUserProfileModal({
         body: JSON.stringify({
           fullName: fullName.trim(),
           email: email.trim(),
-          password: newPassword.trim() ? newPassword.trim() : undefined,
+          password: newPassword.length > 0 ? newPassword : undefined,
           companyId: user.role === 'AGENT' ? companyId : undefined,
         }),
       });
@@ -286,6 +286,7 @@ export function AdminUserProfileModal({
                 <input
                   type="email"
                   required
+                  autoComplete="off"
                   value={email}
                   onChange={(e) => setEmail(e.target.value)}
                   className="mt-1 w-full rounded-lg border border-slate-300 px-3 py-2 text-sm"
@@ -302,6 +303,7 @@ export function AdminUserProfileModal({
                   <input
                     type={showNewPwd ? 'text' : 'password'}
                     minLength={6}
+                    autoComplete="new-password"
                     value={newPassword}
                     onChange={(e) => setNewPassword(e.target.value)}
                     placeholder="Leave blank to keep existing"

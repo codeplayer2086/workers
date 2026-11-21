@@ -57,6 +57,7 @@ test('getCookieSecurityOptions adapts to HTTPS iframe/proxy vs local HTTP', () =
     sameSite: 'none',
     secure: true,
     path: '/',
+    partitioned: true,
   });
   assert.deepEqual(getCookieSecurityOptions(false), {
     httpOnly: true,

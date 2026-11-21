@@ -61,11 +61,13 @@ export function getCookieSecurityOptions(isHttps: boolean): {
   sameSite: 'none' | 'lax';
   secure: boolean;
   path: '/';
+  partitioned?: true;
 } {
   return {
     httpOnly: true,
     sameSite: isHttps ? 'none' : 'lax',
     secure: isHttps,
     path: '/',
+    ...(isHttps ? { partitioned: true as const } : {}),
   };
 }
